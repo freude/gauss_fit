@@ -9,7 +9,7 @@ import pickle
 import numpy as np
 
 
-class GFit(object):
+class AbstractGFit(object):
     """
     The class serves to represent a wave function defined on a bunch of points as a sum of Gaussians
     using the non-linear regression technique

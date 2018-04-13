@@ -1,22 +1,22 @@
 """
     The class is for fitting a grid function by a set of gaussian functions
 """
+from __future__ import print_function, division
 import os
 import sys
-from scipy.optimize import curve_fit
-# -----------------------------------------------------------
+import pickle
 import matplotlib.pyplot as plt
-from invdisttree import Invdisttree
-# -----------------------------------------------------------
 import numpy as np
+from scipy.optimize import curve_fit
 from scipy.ndimage.filters import maximum_filter, minimum_filter
 from scipy.ndimage import binary_dilation
 from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
+from abstract_gauss_fit import AbstractGFit
+from invdisttree import Invdisttree
 from aux_fun import mat2table
-import pickle
 
 
-class GFit(object):
+class GFit(AbstractGFit):
 
     __slots__ = ('_cube',
                  '_bounds',
@@ -518,7 +518,9 @@ if __name__ == "__main__":
     wf = GFit(sn=10,
               qn=1,
               num_fu=4)
+
     wf.set_init_conditions(method='nuclei', coords=np.array([[0, 0, 0]]), widths=1, amps=1)
     wf.do_fit(np.squeeze(M1[0, 2, :, :, :]), x=X, y=Y, z=Z)
     ANS = wf.get_data_matrix(X, Y, Z)
+
     print 'hi'
