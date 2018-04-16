@@ -4,85 +4,82 @@
 from __future__ import print_function, division
 import os
 import sys
-import pickle
-import matplotlib.pyplot as plt
+import logging
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy.ndimage.filters import maximum_filter, minimum_filter
 from scipy.ndimage import binary_dilation
-from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
+from scipy.ndimage.morphology import generate_binary_structure
 from abstract_gauss_fit import AbstractGFit
-from invdisttree import Invdisttree
 from aux_fun import mat2table
 
+logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
 class GFit(AbstractGFit):
-
     __slots__ = ('_cube',
-                 '_bounds',
+                 '_constraints',
                  '_save',
                  '_num_fu',
-                 '_sn', '_qn',
-                 '_model',
+                 '_id',
                  '_init_mode',
                  '_gf',
                  '_is_fitted',
-                 '_nuclei_coords',
                  '_basis_set')
 
-    def __new__(cls, *args, **kwargs):
-
-        if args and isinstance(args[0], str):
-            psave = args[0]
-        else:
-            psave = None
-
-        if psave:
-            with open(psave) as f:
-                inst = pickle.load(f)
-            if not isinstance(inst, cls):
-                raise TypeError('Unpickled object is not of type {}'.format(cls))
-        else:
-            inst = super(GFit, cls).__new__(cls, *args, **kwargs)
-        return inst
-
-    def __init__(self, **kw):
+    def __init__(self, gf=None, **kw):
 
         # path to save fitting parameters
-        self._save = kw.get('psave', '/data/users/mklymenko/work_py/mb_project/')
-
-        self._sn = kw.get('sn', 0)           # id of the system
-        self._qn = kw.get('qn', 0)           # id of the wave function
+        save_dir = kw.get('psave', os.getcwd())
+        self._id = kw.get('id', 0)  # id of the wave function
+        self._save = os.path.join(save_dir, str(self._id), '.npy')
         self._cube = kw.get('cube', np.array([[-3, -3, -3], [3, 3, 3]]))
         # type of basis functions (s, px, py, pz)
-        self._basis_set = kw.get('basis_set', [12, 0, 0, 0])
+        self._basis_set = kw.get('basis_set', [7, 1, 1, 1])
+
+        self._init_mode = 0  # choice of the init method
+        self._constraints = 0
+
+        if isinstance(gf, list):
+            self._gf = gf
+            self._is_fitted = True
+
+        elif isinstance(gf, GFit):
+
+            self._gf = gf.gf
+            self._is_fitted = gf.is_fitted
+            self._id = gf.id
+            self._save, self._basis_set, self._init_mode = gf.get_params()
+            self._cube = gf.cube
+            self._constraints = gf.constraints
+
+        else:
+            self._gf = []
+            self._is_fitted = False
+
         self._num_fu = np.sum(self._basis_set)
 
-        self._model = 0                      # choice of the model function
-        self._init_mode = 0                  # choice of the init method
-
-        self._save = os.path.join(self._save, str(self._sn), '_', str(self._qn), '.npy')
-
-        self._gf = 0
-        self._is_fitted = False
-        self._bounds = 0
-        self._nuclei_coords = None
-
-    def print_info(self):
-
-        print('\n---------------------------------------------------------------------')
-        print('The fitting is provided for the function')
-        print(str(self._sn) + '_' + str(self._qn))
-        print('The number of primitive Gaussians is {}'.format(self._num_fu))
-        print('---------------------------------------------------------------------\n')
+    def get_params(self):
+        return self._save, self._basis_set, self._init_mode
 
     @property
-    def bounds(self):
-        return self._bounds
+    def gf(self):
+        return self._gf
 
-    @bounds.setter
-    def bounds(self, bounds):
-        self._bounds = bounds
+    @property
+    def id(self):
+        return self._id
+
+    @property
+    def is_fitted(self):
+        return self.is_fitted
+
+    @property
+    def constraints(self):
+        return self._constraints
+
+    @constraints.setter
+    def constraints(self, bounds):
+        self._constraints = bounds
 
     @property
     def cube(self):
@@ -92,39 +89,31 @@ class GFit(AbstractGFit):
     def cube(self, cube_coords):
         self._cube = cube_coords
 
-    @property
-    def nuclei_coords(self):
-        return self._nuclei_coords
-
-    @nuclei_coords.setter
-    def nuclei_coords(self, nuclei_coords):
-        self._nuclei_coords = nuclei_coords
-
     def set_init_conditions(self, **kw):
 
         self._init_mode = kw.get('method', None)
 
         if self._init_mode == 'nuclei':
 
-            if np.size(self._nuclei_coords) == 0 or self._nuclei_coords is None:
-                self._nuclei_coords = kw.get('coords', None)
-                if self._nuclei_coords is None:
-                    raise ValueError("Please, specify the coords")
-
-            s = np.shape(self._nuclei_coords)
+            nuclei_coords = kw.get('nuclei_coords', None)
             widths = kw.get('widths', None)
             amps = kw.get('amps', None)
 
+            if nuclei_coords is None:
+                raise ValueError("Please, specify the coords")
             if widths is None:
                 raise ValueError("Please, specify the widths")
             if amps is None:
                 raise ValueError("Please, specify the amps")
-            if np.size(widths) == 1:
-                widths = [widths for _ in xrange(s[0])]
-            if np.size(amps) == 1:
-                amps = [amps for _ in xrange(s[0])]
 
-            self._distr_gaussians_over_nuclei(self._nuclei_coords, widths, amps)
+            nuclei = np.shape(nuclei_coords)
+
+            if np.size(widths) == 1:
+                widths = [widths for _ in xrange(nuclei[0])]
+            if np.size(amps) == 1:
+                amps = [amps for _ in xrange(nuclei[0])]
+
+            self._distr_gaussians_over_nuclei(nuclei_coords, widths, amps)
 
     # ------------------------------------------------------------------------------------------------
 
@@ -139,8 +128,7 @@ class GFit(AbstractGFit):
         """
 
         if set_bounds:
-
-            self._bounds = (np.zeros(self._num_fu*5), np.zeros(self._num_fu*5))
+            self._constraints = (np.zeros(self._num_fu * 5), np.zeros(self._num_fu * 5))
 
         if num_fu is None:
             num_fu = self._num_fu
@@ -160,18 +148,17 @@ class GFit(AbstractGFit):
             self._gf[j * 5 + 4] = amp[j1]
 
             if set_bounds:
+                self._constraints[0][j * 5] = max(coords[j1, 0] - 3.5, self._cube[0][0])
+                self._constraints[0][j * 5 + 1] = max(coords[j1, 1] - 3.5, self._cube[0][1])
+                self._constraints[0][j * 5 + 2] = max(coords[j1, 2] - 3.5, self._cube[0][2])
+                self._constraints[0][j * 5 + 3] = 0.01
+                self._constraints[0][j * 5 + 4] = -5.0
 
-                self._bounds[0][j * 5] = max(coords[j1, 0]-3.5, self._cube[0][0])
-                self._bounds[0][j * 5 + 1] = max(coords[j1, 1] - 3.5, self._cube[0][1])
-                self._bounds[0][j * 5 + 2] = max(coords[j1, 2] - 3.5, self._cube[0][2])
-                self._bounds[0][j * 5 + 3] = 0.01
-                self._bounds[0][j * 5 + 4] = -5.0
-
-                self._bounds[1][j * 5] = min(coords[j1, 0] + 3.5, self._cube[1][0])
-                self._bounds[1][j * 5 + 1] = min(coords[j1, 1] + 3.5, self._cube[1][1])
-                self._bounds[1][j * 5 + 2] = min(coords[j1, 2] + 3.5, self._cube[1][2])
-                self._bounds[1][j * 5 + 3] = 7.0
-                self._bounds[1][j * 5 + 4] = 5.0
+                self._constraints[1][j * 5] = min(coords[j1, 0] + 3.5, self._cube[1][0])
+                self._constraints[1][j * 5 + 1] = min(coords[j1, 1] + 3.5, self._cube[1][1])
+                self._constraints[1][j * 5 + 2] = min(coords[j1, 2] + 3.5, self._cube[1][2])
+                self._constraints[1][j * 5 + 3] = 7.0
+                self._constraints[1][j * 5 + 4] = 5.0
 
             j1 += 1
 
@@ -197,42 +184,24 @@ class GFit(AbstractGFit):
             self._gf[j * 5 + 4] = amp[j]
 
     def do_fit(self, data, x=None, y=None, z=None):
-        """ The function does the fitting procedure"""
+        """ The function processes the fitting procedure"""
 
-        self.print_info()
+        logging.info('---------------------------------------------------------------------')
+        logging.info('The fitting is provided for the function ' + str(self._id))
+        logging.info('The number of primitive Gaussians is {}'.format(self._num_fu))
+        logging.info('---------------------------------------------------------------------')
 
         if True:
 
             if x is not None:
                 data = mat2table(x, y, z, data)
 
-            popt, pcov = curve_fit(self.modelfun, data[:, :3].T, np.squeeze(data[:, 3:]), p0=self._gf, bounds=self._bounds, ftol=0.0000001, xtol=0.0000001)
+            popt, pcov = curve_fit(self.modelfun, data[:, :3].T, np.squeeze(data[:, 3:]), p0=self._gf,
+                                   bounds=self._constraints, ftol=0.0000001, xtol=0.0000001)
             self._gf = popt
 
         else:
             sys.exit("Wrong flag in do_fit")
-
-    # @staticmethod
-    # def modelfun(x, *par):
-    #     """
-    #     The model function represented by a sum of
-    #     the Gaussian functions with variable positions, widths and
-    #     amplitudes
-    #     """
-    #
-    #     g = np.zeros(len(x[0]))
-    #
-    #     for j in range(len(par)//5):
-    #         x1 = par[j*5]
-    #         x2 = par[j*5+1]
-    #         x3 = par[j*5+2]
-    #         w = par[j*5+3]
-    #         a = par[j*5+4]
-    #         r1 = pow((x[0]-x1), 2)+pow((x[1]-x2), 2)+pow((x[2]-x3), 2)
-    #         # if ((a > 1.1) or (a < -1.1)): a=0
-    #         g = g+a*np.exp(-r1/abs(w))
-    #
-    #     return g
 
     def modelfun(self, x, *par):
         """
@@ -249,11 +218,11 @@ class GFit(AbstractGFit):
         flag = 0
 
         for j in range(len(par) // 5):
-            x1 = par[j*5]
-            x2 = par[j*5+1]
-            x3 = par[j*5+2]
-            w = par[j*5+3]
-            a = par[j*5+4]
+            x1 = par[j * 5]
+            x2 = par[j * 5 + 1]
+            x3 = par[j * 5 + 2]
+            w = par[j * 5 + 3]
+            a = par[j * 5 + 4]
 
             r1 = pow((x[0] - x1), 2) + pow((x[1] - x2), 2) + pow((x[2] - x3), 2)
 
@@ -261,158 +230,18 @@ class GFit(AbstractGFit):
                 flag += 1
 
             if flag == 0:
-                g = g+a*np.exp(-r1/abs(w))
+                g = g + a * np.exp(-r1 / abs(w))
 
             if flag == 1:
-                g = g+a*(x[0] - x1)*np.exp(-r1/abs(w))
+                g = g + a * (x[0] - x1) * np.exp(-r1 / abs(w))
 
             if flag == 2:
-                g = g+a*(x[1] - x2)*np.exp(-r1/abs(w))
+                g = g + a * (x[1] - x2) * np.exp(-r1 / abs(w))
 
             if flag == 3:
-                g = g+a*(x[2] - x3)*np.exp(-r1/abs(w))
+                g = g + a * (x[2] - x3) * np.exp(-r1 / abs(w))
 
         return g
-
-#     # ------------------------------------------------------------------------------------------------
-#
-#     def get_value(self,x):
-#         X, F = self.read_from_file(self._sn, self._qn, self._path)
-#         invdisttree = Invdisttree(X.T, F, leafsize=10, stat=1)
-#         return invdisttree(x, nnear=130, eps=0, p=1)
-#
-#     @staticmethod
-#     def resample(data, xx, yy, zz):
-#
-#         # xx, yy, zz = np.mgrid[-6.5:6.5:160j, 4.0:8.9:160j, -7.5:7.5:160j]
-#         xx, yy, zz = xx.flatten(), yy.flatten(), zz.flatten()
-#         xx = np.vstack((xx, yy, zz))
-#
-#         invdisttree = Invdisttree(data[:, :3], data[:, 3:], leafsize=10, stat=1)
-#         return xx, invdisttree(xx.T, nnear=130, eps=0, p=1)
-#
-#     @staticmethod
-#     def detect_min_max(arr):
-#         """That's a very nice function detecting all local minima and maxima
-#         and computing their coordinates.
-#         The method is based on derivatives.
-#         """
-#
-#         x1, x2, y1, y2, z1, z2 = GFit.coords_of_cube(arr)
-#         steps = 160
-#         xi, yi, zi = np.mgrid[x1:x2:100j, y1:y2:100j, z1:z2:100j]
-#         _, arr = GFit.resample(arr, xi, yi, zi)
-#         arr = arr.reshape(xi.shape)
-#
-#         return detect_peaks(xi, yi, zi, arr)
-#
-#     @staticmethod
-#     def coords_of_cube(data):
-#
-#         x_min = np.min(data[:, 0])
-#         x_max = np.max(data[:, 0])
-#         y_min = np.min(data[:, 1])
-#         y_max = np.max(data[:, 1])
-#         z_min = np.min(data[:, 2])
-#         z_max = np.max(data[:, 2])
-#
-#         return x_min, x_max, y_min, y_max, z_min, z_max
-#
-#     def save(self):
-#         """Save Gaussian functions coefficients to the file"""
-#
-#         if self._save != '0':
-#             p = self._save+self._path[-3:-1]+'_'+str(self._qn)+'.dat'
-#             np.save(self._gf, p)
-#         else:
-#             sys.exit("Wrong path to save")
-#
-#     def modelfun1(self, x, *par):
-#         """
-#         The model function represented by a sum of
-#         the Gaussian functions with variable positions, widths and
-#         amplitudes
-#         """
-#
-#         g = np.zeros(len(x[0]))
-#
-#         for j in range(len(par)//5):
-#             x1 = par[j*5]
-#             x2 = par[j*5+1]
-#             x3 = par[j*5+2]
-#             w = par[j*5+3]
-#             a = par[j*5+4]
-#             r1 = pow((x[0]-x1), 2)+pow((x[1]-x2), 2)+pow((x[2]-x3), 2)
-#             # if ((a > 1.1) or (a < -1.1)): a=0
-#             g = g+a*np.exp(-r1/abs(w))
-#
-#         return g
-#
-# # -------------------------------------------------------------------------
-# # --------------Tool for extracting values of the wave function------------
-# # -------------------------------------------------------------------------
-#
-    def get_data(self, x):
-        """
-        Computes the value of the wave function in points stored in
-        the vector x using fitting parameters and the model functions.
-        """
-
-        if (self._model == 0):
-            g = self.modelfun(x, *self._gf)
-
-        return g
-
-    def get_data_matrix(self, *x):
-        """
-        Computes the value of the wave function in points stored in
-        the vector x using fitting parameters and the model functions.
-        """
-
-        coords = [j.flatten() for j in x]
-        XX = np.vstack(coords)
-        g = self.get_data(XX)
-
-        return g.reshape(x[0].shape)
-
-    def show_gf(self, x):
-        """Same as show_func(self,x) but returns
-        decomposed primitive Gaussian functions
-        """
-        g = np.zeros((len(x[0]), self._num_fu), dtype=np.float64)
-        for j in range(self._num_fu):
-            x1 = self._gf[j*5]
-            x2 = self._gf[j*5+1]
-            x3 = self._gf[j*5+2]
-            w = self._gf[j*5+3]
-            a = self._gf[j*5+4]
-            r1 = pow((x[0]-x1), 2)+pow((x[1]-x2), 2)+pow((x[2]-x3), 2)
-            g[:, j] = a*np.exp(-r1/abs(w))
-
-        return g
-
-# # ----------------------------------------------------------------------
-#
-#     @staticmethod
-#     def moments(data):
-#         """Returns (height, x, y, width_x, width_y)
-#          the gaussian parameters of a 2D distribution by calculating its
-#         moments """
-#
-#         data = np.absolute(data)
-#         total = data.sum()
-#         X = np.indices(data.shape)
-#         x = (X*data).sum()/total
-#         width = np.sqrt((((X-x)**2)*data).sum()/data.sum())
-#         m_max = data.max()
-#         m_min = data.min()
-#         if np.absolute(m_max) >= np.absolute(m_min):
-#             height = m_max
-#         else:
-#             height = m_min
-#         return height, x, width
-
-#-----------------------------------------------------------------------
 
 
 def detect_peaks(x, y, z, image):
@@ -429,9 +258,9 @@ def detect_peaks(x, y, z, image):
     a = binary_dilation(a, structure=neighborhood).astype(a.dtype)
     neighborhood = binary_dilation(a, structure=neighborhood).astype(bool)
 
-    #apply the local maximum filter; all pixel of maximal value
-    #in their neighborhood are set to 1
-    local_max = maximum_filter(image, footprint=neighborhood)==image
+    # apply the local maximum filter; all pixel of maximal value
+    # in their neighborhood are set to 1
+    local_max = maximum_filter(image, footprint=neighborhood) == image
 
     # #local_max is a mask that contains the peaks we are
     # #looking for, but also the background.
@@ -475,15 +304,13 @@ def detect_peaks(x, y, z, image):
         z_peaks_min = z_peaks_min[peaks_min < 0.3 * norm]
         peaks_min = peaks_min[peaks_min < 0.3 * norm]
 
-    return peaks_min, np.vstack((x_peaks_min, y_peaks_min, z_peaks_min)),\
+    return peaks_min, np.vstack((x_peaks_min, y_peaks_min, z_peaks_min)), \
            peaks_max, np.vstack((x_peaks_max, y_peaks_max, z_peaks_max))
-#---------------------------------------------------------------------------
-#---------------------------------------------------------------------------
-#---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
 
+    import matplotlib.pyplot as plt
     from read_env import read_env1
     from coordsys import CoordSys
     import silicon_params as si
@@ -500,14 +327,16 @@ if __name__ == "__main__":
     path = '/home/mk/p_dopant/p_bulk/p_dopant_data/'
 
     # data preparation
-    num_cells = 40
-    T = 2
+    num_cells = 80
+    T = 1
     coorsys = CoordSys(num_cells, T, 'au')
     coorsys.set_origin_cells(num_cells / 2 + 1)
     x = coorsys.x()
+    x = x[::2]
+
     X, Y, Z = np.meshgrid(x, x, x, indexing='ij')
     s = X.shape
-    bands = np.array([1,2,3]) - 1
+    bands = np.array([1, 2, 3, 4, 5, 6, 7]) - 1
     Nbands = len(bands)
     M1 = np.zeros((1, Nbands, s[0], s[1], s[2]))
 
@@ -519,8 +348,8 @@ if __name__ == "__main__":
               qn=1,
               num_fu=4)
 
-    wf.set_init_conditions(method='nuclei', coords=np.array([[0, 0, 0]]), widths=1, amps=1)
-    wf.do_fit(np.squeeze(M1[0, 2, :, :, :]), x=X, y=Y, z=Z)
+    wf.set_init_conditions(method='nuclei', nuclei_coords=np.array([[0, 0, 0]]), widths=1, amps=1)
+    wf.do_fit(np.squeeze(M1[0, 5, :, :, :]), x=X, y=Y, z=Z)
     ANS = wf.get_data_matrix(X, Y, Z)
 
-    print 'hi'
+    print('hi')
