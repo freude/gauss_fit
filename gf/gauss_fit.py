@@ -34,7 +34,7 @@ class GFit(AbstractGFit):
         self._save = os.path.join(save_dir, str(self._id), '.npy')
         self._cube = kw.get('cube', np.array([[-3, -3, -3], [3, 3, 3]]))
         # type of basis functions (s, px, py, pz)
-        self._basis_set = kw.get('basis_set', [7, 1, 1, 1])
+        self._basis_set = kw.get('basis_set', [10, 0, 0, 0])
 
         self._init_mode = 0  # choice of the init method
         self._constraints = 0
@@ -344,9 +344,7 @@ if __name__ == "__main__":
         print(jj1)
         M1[jj1, :, :, :, :] = read_env1(X, Y, Z, bands, path, kk[2 * jj1], 0)
 
-    wf = GFit(sn=10,
-              qn=1,
-              num_fu=4)
+    wf = GFit(basis_set=[16])
 
     wf.set_init_conditions(method='nuclei', nuclei_coords=np.array([[0, 0, 0]]), widths=1, amps=1)
     wf.do_fit(np.squeeze(M1[0, 5, :, :, :]), x=X, y=Y, z=Z)
